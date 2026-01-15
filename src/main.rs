@@ -1,8 +1,9 @@
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use rayon::prelude::*;
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const DATA_URL: &str = "https://raw.githubusercontent.com/guilhermeasn/loteria.json/master/data/megasena.json";
@@ -30,6 +31,24 @@ fn generate_combination(rng: &mut impl rand::Rng) -> BTreeSet<u8> {
     let mut numbers: Vec<u8> = (1..=60).collect();
     numbers.shuffle(rng);
     numbers.into_iter().take(6).collect()
+}
+
+fn find_match(target: &BTreeSet<u8>, running: &AtomicBool) -> Option<u64> {
+    let mut rng = thread_rng();
+    let mut attempts: u64 = 0;
+
+    loop {
+        if !running.load(Ordering::Relaxed) {
+            return None;
+        }
+
+        attempts += 1;
+        let combo = generate_combination(&mut rng);
+
+        if &combo == target {
+            return Some(attempts);
+        }
+    }
 }
 
 fn print_statistics(results: &[u64], elapsed: std::time::Duration) {
@@ -65,12 +84,13 @@ fn print_statistics(results: &[u64], elapsed: std::time::Duration) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Mega-Sena Average Attempts Calculator ===\n");
+    println!("Using {} threads\n", rayon::current_num_threads());
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
 
     ctrlc::set_handler(move || {
-        println!("\n\nReceived Ctrl+C, finishing up...");
+        println!("\n\nReceived Ctrl+C, finishing current draws...");
         r.store(false, Ordering::SeqCst);
     })?;
 
@@ -90,35 +110,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Processing {} draws (last to first)...\n", draws.len());
 
     let start = Instant::now();
-    let mut results: Vec<u64> = Vec::new();
-    let mut rng = thread_rng();
+    let results: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+    let completed = AtomicUsize::new(0);
 
-    for (draw_num, target) in &draws {
-        if !running.load(Ordering::SeqCst) {
-            break;
+    draws.par_iter().for_each(|(draw_num, target)| {
+        if !running.load(Ordering::Relaxed) {
+            return;
         }
 
-        let mut attempts: u64 = 0;
+        if let Some(attempts) = find_match(target, &running) {
+            let mut res = results.lock().unwrap();
+            res.push(attempts);
+            let count = res.len();
+            let avg = res.iter().sum::<u64>() as f64 / count as f64;
+            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
 
-        loop {
-            attempts += 1;
-            let combo = generate_combination(&mut rng);
-
-            if &combo == target {
-                break;
-            }
+            println!(
+                "Draw #{}: found in {} attempts (avg: {:.2}, completed: {})",
+                draw_num, attempts, avg, done
+            );
         }
+    });
 
-        results.push(attempts);
-
-        let current_avg = results.iter().sum::<u64>() as f64 / results.len() as f64;
-        println!(
-            "Draw #{}: found in {} attempts (avg: {:.2})",
-            draw_num, attempts, current_avg
-        );
-    }
-
-    print_statistics(&results, start.elapsed());
+    let final_results = results.lock().unwrap();
+    print_statistics(&final_results, start.elapsed());
 
     Ok(())
 }
