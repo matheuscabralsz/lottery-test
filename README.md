@@ -1,6 +1,6 @@
 # Mega-Sena Random Match Finder
 
-Rust CLI that generates random Mega-Sena combinations until matching a historical winning result.
+Rust CLI that calculates the average attempts needed to randomly match historical Mega-Sena results.
 
 ## Build & Run
 
@@ -8,15 +8,23 @@ Rust CLI that generates random Mega-Sena combinations until matching a historica
 cargo run --release
 ```
 
+Press `Ctrl+C` to stop and see statistics.
+
 ## How It Works
 
 1. Fetches ~2,800 historical draws from [loteria.json](https://github.com/guilhermeasn/loteria.json)
-2. Generates random 6-number combinations (1-60)
-3. Checks against all historical results using O(1) HashSet lookup
-4. Stops on first match, displaying attempts, time, combination, and contest number
+2. Iterates from last to first draw
+3. For each draw, generates random 6-number combinations (1-60) until matching
+4. Displays progress: `Draw #N: found in X attempts (avg: Y)`
+5. On exit, shows final statistics: average, median, min, max
+
+## Expected Results
+
+Theoretical average: ~50 million attempts per draw (C(60,6) = 50,063,860 combinations)
 
 ## Dependencies
 
 - `rand` - random number generation
-- `reqwest` - HTTP client (with rustls-tls)
+- `reqwest` - HTTP client
 - `serde` / `serde_json` - JSON parsing
+- `ctrlc` - graceful shutdown
